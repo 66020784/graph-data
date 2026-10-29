@@ -1,0 +1,370 @@
+
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Neo4j Knowledge Graph</title>
+
+  <!-- Library สำหรับแสดงกราฟ -->
+  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Arial, Tahoma, sans-serif;
+      background: #0f172a;
+      color: #f8fafc;
+    }
+
+    header {
+      padding: 20px;
+      background: #1e293b;
+      border-bottom: 1px solid #334155;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 24px;
+    }
+
+    header p {
+      margin: 0;
+      color: #cbd5e1;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 15px 20px;
+    }
+
+    input, button {
+      padding: 10px 12px;
+      border: 1px solid #475569;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+
+    input {
+      flex: 1;
+      min-width: 180px;
+      background: #1e293b;
+      color: white;
+    }
+
+    button {
+      background: #2563eb;
+      color: white;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #1d4ed8;
+    }
+
+    #network {
+      height: 65vh;
+      min-height: 400px;
+      margin: 0 20px;
+      background: #111827;
+      border: 1px solid #334155;
+      border-radius: 10px;
+    }
+
+    #status {
+      padding: 0 20px 12px;
+      color: #93c5fd;
+    }
+
+    #details {
+      margin: 15px 20px 25px;
+      padding: 16px;
+      background: #1e293b;
+      border-radius: 8px;
+      overflow-wrap: anywhere;
+    }
+
+    #details h2 {
+      margin-top: 0;
+      font-size: 18px;
+    }
+
+    #details pre {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    @media (max-width: 600px) {
+      h1 {
+        font-size: 20px;
+      }
+
+      #network {
+        margin: 0 10px;
+        height: 60vh;
+      }
+
+      #details {
+        margin: 12px 10px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>Neo4j Knowledge Graph</h1>
+    <p>กราฟความรู้จาก Neo4j Aura</p>
+  </header>
+
+  <div class="toolbar">
+    <input
+      id="search"
+      type="text"
+      placeholder="ค้นหาชื่อโหนด..."
+      aria-label="ค้นหาชื่อโหนด"
+    >
+    <button id="searchBtn">ค้นหา</button>
+    <button id="resetBtn">แสดงทั้งหมด</button>
+    <button id="fitBtn">จัดกราฟให้อยู่ในหน้าจอ</button>
+  </div>
+
+  <div id="status" role="status">กำลังโหลดข้อมูล...</div>
+  <div id="network"></div>
+
+  <section id="details">
+    <h2>รายละเอียด</h2>
+    <p>คลิกโหนดหรือเส้นความสัมพันธ์เพื่อดูข้อมูล</p>
+  </section>
+
+  <script>
+    const status = document.getElementById("status");
+    const details = document.getElementById("details");
+    const searchInput = document.getElementById("search");
+
+    let network;
+    let allNodes;
+    let allEdges;
+
+    async function initGraph() {
+      try {
+        if (typeof vis === "undefined") {
+          throw new Error("โหลดไลบรารีแสดงกราฟไม่สำเร็จ");
+        }
+
+        const response = await fetch("./graph-data.json");
+
+        if (!response.ok) {
+          throw new Error(
+            "ไม่พบ graph-data.json กรุณาตรวจสอบว่าอัปโหลดไฟล์แล้ว"
+          );
+        }
+
+        const graph = await response.json();
+
+        if (
+          !Array.isArray(graph.nodes) ||
+          !Array.isArray(graph.edges)
+        ) {
+          throw new Error(
+            "รูปแบบ JSON ต้องมี nodes และ edges เป็นรายการ"
+          );
+        }
+
+        const nodeIds = new Set(
+          graph.nodes.map(node => String(node.id))
+        );
+
+        const nodes = graph.nodes.map(node => ({
+          ...node,
+          id: String(node.id),
+          label: String(node.label ?? node.id),
+          title: String(node.label ?? node.id),
+          color: {
+            background: "#2563eb",
+            border: "#93c5fd",
+            highlight: {
+              background: "#f59e0b",
+              border: "#fef3c7"
+            }
+          },
+          font: {
+            color: "#ffffff"
+          }
+        }));
+
+        const edges = graph.edges
+          .filter(edge =>
+            nodeIds.has(String(edge.from)) &&
+            nodeIds.has(String(edge.to))
+          )
+          .map((edge, index) => ({
+            ...edge,
+            id: edge.id ?? `edge-${index}`,
+            from: String(edge.from),
+            to: String(edge.to),
+            label: String(edge.label ?? ""),
+            color: "#64748b",
+            font: {
+              color: "#cbd5e1",
+              align: "middle"
+            },
+            arrows: {
+              to: {
+                enabled: true,
+                scaleFactor: 0.6
+              }
+            }
+          }));
+
+        allNodes = new vis.DataSet(nodes);
+        allEdges = new vis.DataSet(edges);
+
+        const container = document.getElementById("network");
+
+        network = new vis.Network(
+          container,
+          {
+            nodes: allNodes,
+            edges: allEdges
+          },
+          {
+            autoResize: true,
+            interaction: {
+              hover: true,
+              navigationButtons: true,
+              keyboard: true
+            },
+            physics: {
+              stabilization: {
+                iterations: 150
+              },
+              barnesHut: {
+                gravitationalConstant: -2500,
+                springLength: 140
+              }
+            },
+            nodes: {
+              shape: "dot",
+              size: 22,
+              borderWidth: 2
+            },
+            edges: {
+              smooth: {
+                type: "dynamic"
+              }
+            }
+          }
+        );
+
+        network.on("click", function (params) {
+          if (params.nodes.length > 0) {
+            const node = allNodes.get(params.nodes[0]);
+            showDetails("โหนด", node);
+          } else if (params.edges.length > 0) {
+            const edge = allEdges.get(params.edges[0]);
+            showDetails("ความสัมพันธ์", edge);
+          }
+        });
+
+        status.textContent =
+          `โหลดสำเร็จ: ${allNodes.length} โหนด, ` +
+          `${allEdges.length} ความสัมพันธ์`;
+
+      } catch (error) {
+        status.textContent = "เกิดข้อผิดพลาด: " + error.message;
+      }
+    }
+
+    function showDetails(type, data) {
+      details.replaceChildren();
+
+      const heading = document.createElement("h2");
+      heading.textContent = "รายละเอียด" + type;
+
+      const content = document.createElement("pre");
+      content.textContent = JSON.stringify(data, null, 2);
+
+      details.append(heading, content);
+    }
+
+    function searchNode() {
+      if (!network || !allNodes) return;
+
+      const query = searchInput.value.trim().toLowerCase();
+
+      if (!query) {
+        resetGraph();
+        return;
+      }
+
+      const matches = allNodes.get({
+        filter: node =>
+          String(node.label).toLowerCase().includes(query)
+      });
+
+      if (matches.length > 0) {
+        const ids = matches.map(node => node.id);
+
+        network.selectNodes(ids);
+        network.focus(ids[0], {
+          scale: 1.2,
+          animation: true
+        });
+
+        showDetails("โหนด", matches[0]);
+        status.textContent = `พบ ${matches.length} โหนด`;
+      } else {
+        network.unselectAll();
+        status.textContent = "ไม่พบโหนดที่ค้นหา";
+      }
+    }
+
+    function resetGraph() {
+      if (!network || !allNodes) return;
+
+      searchInput.value = "";
+      network.unselectAll();
+      network.fit({
+        animation: true
+      });
+
+      status.textContent =
+        `แสดงทั้งหมด: ${allNodes.length} โหนด, ` +
+        `${allEdges.length} ความสัมพันธ์`;
+    }
+
+    document
+      .getElementById("searchBtn")
+      .addEventListener("click", searchNode);
+
+    searchInput.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        searchNode();
+      }
+    });
+
+    document
+      .getElementById("resetBtn")
+      .addEventListener("click", resetGraph);
+
+    document
+      .getElementById("fitBtn")
+      .addEventListener("click", function () {
+        if (network) {
+          network.fit({
+            animation: true
+          });
+        }
+      });
+
+    initGraph();
+  </script>
+</body>
+</html>
